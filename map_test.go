@@ -8,26 +8,27 @@ import (
 	"fmt"
 	"math/rand"
 	"strconv"
+	"sync"
 	"testing"
 	"time"
 )
 
 type keyT = string
-type valueT = interface{}
+type valueT = string
 
 func k(key int) keyT {
 	return strconv.FormatInt(int64(key), 10)
 }
 
-func add(x keyT, delta int) int {
+func add(x keyT, delta int) string {
 	i, err := strconv.ParseInt(x, 10, 64)
 	if err != nil {
 		panic(err)
 	}
-	return int(i + int64(delta))
+	return k(int(i + int64(delta)))
 }
 
-///////////////////////////
+// /////////////////////////
 func random(N int, perm bool) []keyT {
 	nums := make([]keyT, N)
 	if perm {
@@ -67,22 +68,20 @@ func TestRandomData(t *testing.T) {
 	start := time.Now()
 	for time.Since(start) < time.Second*2 {
 		nums := random(N, true)
-		var m *Map
+		var m *Map[string, string]
 		switch rand.Int() % 5 {
 		default:
-			m = New(N / ((rand.Int() % 3) + 1))
-		case 1:
-			m = new(Map)
-		case 2:
-			m = New(0)
+			m = New[string, string](N / ((rand.Int() % 3) + 1))
+		case 1, 2:
+			m = New[string, string](0)
 		}
 		v, ok := m.Get(k(999))
-		if ok || v != nil {
-			t.Fatalf("expected %v, got %v", nil, v)
+		if ok || v != "" {
+			t.Fatalf("expected %v, got %v", 0, v)
 		}
 		v, ok = m.Delete(k(999))
-		if ok || v != nil {
-			t.Fatalf("expected %v, got %v", nil, v)
+		if ok || v != "" {
+			t.Fatalf("expected %v, got %v", 0, v)
 		}
 		if m.Len() != 0 {
 			t.Fatalf("expected %v, got %v", 0, m.Len())
@@ -90,8 +89,8 @@ func TestRandomData(t *testing.T) {
 		// set a bunch of items
 		for i := 0; i < len(nums); i++ {
 			v, ok := m.Set(nums[i], nums[i])
-			if ok || v != nil {
-				t.Fatalf("expected %v, got %v", nil, v)
+			if ok || v != "" {
+				t.Fatalf("expected %v, got %v", 0, v)
 			}
 		}
 		if m.Len() != N {
@@ -101,7 +100,7 @@ func TestRandomData(t *testing.T) {
 		shuffle(nums)
 		for i := 0; i < len(nums); i++ {
 			v, ok := m.Get(nums[i])
-			if !ok || v == nil || v != nums[i] {
+			if !ok || v == "" || v != nums[i] {
 				t.Fatalf("expected %v, got %v", nums[i], v)
 			}
 		}
@@ -138,8 +137,8 @@ func TestRandomData(t *testing.T) {
 		// check to make sure that the items have been removed
 		for i := 0; i < len(nums)/2; i++ {
 			v, ok := m.Get(nums[i])
-			if ok || v != nil {
-				t.Fatalf("expected %v, got %v", nil, v)
+			if ok || v != "" {
+				t.Fatalf("expected %v, got %v", "", v)
 			}
 		}
 		// check the second half of the items
@@ -152,7 +151,7 @@ func TestRandomData(t *testing.T) {
 		// try to delete again, make sure they don't exist
 		for i := 0; i < len(nums)/2; i++ {
 			v, ok := m.Delete(nums[i])
-			if ok || v != nil {
+			if ok || v != "" {
 				t.Fatalf("expected %v, got %v", nil, v)
 			}
 		}
@@ -182,124 +181,101 @@ func TestRandomData(t *testing.T) {
 	}
 }
 
-func TestSetAccept(t *testing.T) {
-	var m Map
+func TestMutate(t *testing.T) {
+	m := New[string, string](0)
 	m.Set("hello", "world")
-	prev, replaced := m.SetAccept("hello", "planet", nil)
-	if !replaced {
-		t.Fatal("expected true")
+	var prev string
+	delta := m.Mutate("hello", func(value string, ok bool) (string, bool) {
+		prev = value
+		return "planet", true
+	})
+	if delta != 0 {
+		t.Fatal("expected 0 detla")
 	}
-	if prev.(string) != "world" {
+	if prev != "world" {
 		t.Fatalf("expected '%v', got '%v'", "world", prev)
 	}
-	if v, _ := m.Get("hello"); v.(string) != "planet" {
+	if v, _ := m.Get("hello"); v != "planet" {
 		t.Fatalf("expected '%v', got '%v'", "planet", v)
 	}
-	prev, replaced = m.SetAccept("hello", "world", func(prev interface{}, replaced bool) bool {
-		if !replaced {
-			t.Fatal("expected true")
-		}
-		if prev.(string) != "planet" {
-			t.Fatalf("expected '%v', got '%v'", "planet", prev)
-		}
-		return true
+
+	delta = m.Mutate("hello", func(value string, ok bool) (string, bool) {
+		prev = value
+		return "world", true
 	})
-	if !replaced {
-		t.Fatal("expected true")
+	if delta != 0 {
+		t.Fatal("expected 0 delta")
 	}
-	if prev.(string) != "planet" {
+	if prev != "planet" {
 		t.Fatalf("expected '%v', got '%v'", "planet", prev)
 	}
-	prev, replaced = m.SetAccept("hello", "planet", func(prev interface{}, replaced bool) bool {
-		if !replaced {
-			t.Fatal("expected true")
-		}
-		if prev.(string) != "world" {
-			t.Fatalf("expected '%v', got '%v'", "world", prev)
-		}
-		return false
+
+	delta = m.Mutate("hello", func(value string, ok bool) (string, bool) {
+		prev = ""
+		return value, true
 	})
-	if replaced {
-		t.Fatal("expected false")
+	if delta != 0 {
+		t.Fatal("expected 0 delta")
 	}
-	if prev != nil {
-		t.Fatalf("expected '%v', got '%v'", nil, prev)
+	if prev != "" {
+		t.Fatalf("expected '%v', got '%v'", "", prev)
 	}
-	if v, _ := m.Get("hello"); v.(string) != "world" {
+	if v, _ := m.Get("hello"); v != "world" {
 		t.Fatalf("expected '%v', got '%v'", "world", v)
 	}
 
-	prev, replaced = m.SetAccept("hi", "world", func(prev interface{}, replaced bool) bool {
-		if replaced {
-			t.Fatal("expected false")
-		}
-		if prev != nil {
-			t.Fatalf("expected '%v', got '%v'", nil, prev)
-		}
-		return false
+	delta = m.Mutate("hi", func(value string, ok bool) (string, bool) {
+		prev = value
+		return "world", true
 	})
-	if replaced {
-		t.Fatal("expected false")
+	if delta != 1 {
+		t.Fatal("expected 1 delta")
 	}
-	if prev != nil {
-		t.Fatalf("expected '%v', got '%v'", nil, prev)
+	if prev != "" {
+		t.Fatalf("expected '%v', got '%v'", "", prev)
 	}
-}
 
-func TestDeleteAccept(t *testing.T) {
-	var m Map
 	m.Set("hello", "world")
-	prev, deleted := m.DeleteAccept("hello", nil)
-	if !deleted {
-		t.Fatal("expected true")
+	delta = m.Mutate("hello", func(value string, ok bool) (string, bool) {
+		prev = value
+		return "", false
+	})
+	if delta != -1 {
+		t.Fatal("expected -1 delta")
 	}
-	if prev.(string) != "world" {
+	if prev != "world" {
 		t.Fatalf("expected '%v', got '%v'", "world", prev)
 	}
+
 	m.Set("hello", "world")
-	prev, deleted = m.DeleteAccept("hello", func(prev interface{}, deleted bool) bool {
-		if !deleted {
+	delta = m.Mutate("hello", func(value string, ok bool) (string, bool) {
+		if !ok {
 			t.Fatal("expected true")
 		}
-		if prev.(string) != "world" {
-			t.Fatalf("expected '%v', got '%v'", "world", prev)
+		if value != "world" {
+			t.Fatalf("expected '%v', got '%v'", "world", value)
 		}
-		return true
+		prev = ""
+		return value, true
 	})
-	if !deleted {
-		t.Fatal("expected true")
+	if delta == -1 {
+		t.Fatal("expected 0 delta")
 	}
-	if prev.(string) != "world" {
-		t.Fatalf("expected '%v', got '%v'", "world", prev)
-	}
-	m.Set("hello", "world")
-	prev, deleted = m.DeleteAccept("hello", func(prev interface{}, deleted bool) bool {
-		if !deleted {
-			t.Fatal("expected true")
-		}
-		if prev.(string) != "world" {
-			t.Fatalf("expected '%v', got '%v'", "world", prev)
-		}
-		return false
-	})
-	if deleted {
-		t.Fatal("expected false")
-	}
-	if prev != nil {
-		t.Fatalf("expected '%v', got '%v'", nil, prev)
+	if prev != "" {
+		t.Fatalf("expected '%v', got '%v'", "", prev)
 	}
 	prev, ok := m.Get("hello")
 	if !ok {
 		t.Fatal("expected true")
 	}
-	if prev.(string) != "world" {
+	if prev != "world" {
 		t.Fatalf("expected '%v', got '%v'", "world", prev)
 	}
 
 }
 
 func TestClear(t *testing.T) {
-	var m Map
+	m := New[string, int](0)
 	for i := 0; i < 1000; i++ {
 		m.Set(fmt.Sprintf("%d", i), i)
 	}
@@ -309,6 +285,86 @@ func TestClear(t *testing.T) {
 	m.Clear()
 	if m.Len() != 0 {
 		t.Fatalf("expected '%v', got '%v'", 0, m.Len())
+	}
+
+}
+
+// see https://github.com/cornelk/hashmap/issues/73
+func BenchmarkHashMap_RaceCase1(b *testing.B) {
+	const (
+		elementNum0 = 1024
+		iter0       = 8
+	)
+	b.StopTimer()
+	wg := sync.WaitGroup{}
+	for i := 0; i < b.N; i++ {
+		m := New[int, int](0)
+		b.StartTimer()
+		for k := 0; k < iter0; k++ {
+			wg.Add(1)
+			go func(l, h int) {
+				for j := l; j < h; j++ {
+					m.Set(j, j)
+				}
+				for j := l; j < h; j++ {
+					_, a := m.Get(j)
+					if !a {
+						b.Error("key doesn't exist", j)
+					}
+				}
+				for j := l; j < h; j++ {
+					x, _ := m.Get(j)
+					if x != j {
+						b.Error("incorrect value", j, x)
+					}
+				}
+				wg.Done()
+			}(k*elementNum0, (k+1)*elementNum0)
+		}
+		wg.Wait()
+		b.StopTimer()
+	}
+}
+
+func BenchmarkHashMap_RaceCase3(b *testing.B) {
+	const (
+		elementNum0 = 1024
+		iter0       = 8
+	)
+	b.StopTimer()
+	wg := &sync.WaitGroup{}
+	for a := 0; a < b.N; a++ {
+		m := New[int, int](0)
+		b.StartTimer()
+		for j := 0; j < iter0; j++ {
+			wg.Add(1)
+			go func(l, h int) {
+				defer wg.Done()
+				for i := l; i < h; i++ {
+					m.Set(i, i)
+				}
+
+				for i := l; i < h; i++ {
+					_, x := m.Get(i)
+					if !x {
+						b.Errorf("not put: %v\n", i)
+					}
+				}
+				for i := l; i < h; i++ {
+					m.Delete(i)
+
+				}
+				for i := l; i < h; i++ {
+					_, x := m.Get(i)
+					if x {
+						b.Errorf("not removed: %v\n", i)
+					}
+				}
+
+			}(j*elementNum0, (j+1)*elementNum0)
+		}
+		wg.Wait()
+		b.StopTimer()
 	}
 
 }
