@@ -1,14 +1,14 @@
 # `shardmap`
 
-[![GoDoc](https://img.shields.io/badge/api-reference-blue.svg?style=flat-square)](https://godoc.org/github.com/tidwall/shardmap)
+[![GoDoc](https://img.shields.io/badge/api-reference-blue.svg?style=flat-square)](https://godoc.org/github.com/phuslu/shardmap)
 
 A simple and efficient thread-safe sharded hashmap for Go.
 This is an alternative to the standard Go map and `sync.Map`, and is optimized
 for when your map needs to perform lots of concurrent reads and writes.
 
 Under the hood `shardmap` uses 
-[robinhood hashmap](https://github.com/tidwall/rhh) and 
-[xxhash](https://github.com/cespare/xxhash).
+[robinhood hashmap](https://en.wikipedia.org/wiki/Hash_table#Robin_Hood_hashing) and 
+[wyhash](https://github.com/zeebo/wyhash).
 
 # Getting Started
 
@@ -17,7 +17,7 @@ Under the hood `shardmap` uses
 To start using `shardmap`, install Go and run `go get`:
 
 ```sh
-$ go get -u github.com/tidwall/shardmap
+$ go get -u github.com/phuslu/shardmap
 ```
 
 This will retrieve the library.
@@ -28,7 +28,7 @@ The `Map` type works similar to a standard Go map, and includes four methods:
 `Set`, `Get`, `Delete`, `Len`.
 
 ```go
-var m shardmap.Map
+m := shardmap.New[string, string](0)
 m.Set("Hello", "Dolly!")
 val, _ := m.Get("Hello")
 fmt.Printf("%v\n", val)
@@ -40,72 +40,45 @@ fmt.Printf("%v\n", val)
 // Output:
 // Dolly!
 // Dolly!
-// <nil>
+// 
 ```
 
 ## Performance
 
-Benchmarking conncurrent SET, GET, RANGE, and DELETE operations for 
-    `sync.Map`, `map[string]interface{}`, `github.com/tidwall/shardmap`. 
+Benchmarking concurrent SET, GET, RANGE, and DELETE operations for 
+    `sync.Map`, `map[string]interface{}`, `github.com/phuslu/shardmap`. 
 
 ```
-go version go1.13 darwin/amd64 (Macbook 2018)
+go version go1.21.1 linux/amd64 (Intel(R) Xeon(R) Silver 4216 CPU @ 2.10GHz)
 
-     number of cpus: 12
-     number of keys: 1000000
-            keysize: 10
-        random seed: 1569421428153357000
+     number of cpus: 64
+     number of keys: 10000000
+            keysize: 16
+        random seed: 1695723704044340631
 
--- sync.Map --
-set: 1,000,000 ops over 12 threads in 955ms, 1,046,873/sec, 955 ns/op
-get: 1,000,000 ops over 12 threads in 269ms, 3,718,882/sec, 268 ns/op
-rng:       100 ops over 12 threads in 2434ms,       41/sec, 24342711 ns/op
-del: 1,000,000 ops over 12 threads in 241ms, 4,156,554/sec, 240 ns/op
+-- github.com/orcaman/concurrent-map/v2 --
+set: 10,000,000 ops over 64 threads in 1572ms, 6,363,096/sec, 157 ns/op
+get: 10,000,000 ops over 64 threads in 274ms, 36,550,366/sec, 27 ns/op
+del: 10,000,000 ops over 64 threads in 827ms, 12,094,724/sec, 82 ns/op
+rng:       100 ops over 64 threads in 0ms, 425,928/sec, 2347 ns/op
 
--- stdlib map --
-set: 1,000,000 ops over 12 threads in 481ms, 2,078,213/sec, 481 ns/op
-get: 1,000,000 ops over 12 threads in 45ms, 22,439,321/sec, 44 ns/op
-rng:       100 ops over 12 threads in 260ms,       384/sec, 2598202 ns/op
-del: 1,000,000 ops over 12 threads in 187ms, 5,339,459/sec, 187 ns/op
+-- tailscale.com/syncs --
+set: 10,000,000 ops over 64 threads in 428ms, 23,350,888/sec, 42 ns/op
+get: 10,000,000 ops over 64 threads in 103ms, 97,508,463/sec, 10 ns/op
+del: 10,000,000 ops over 64 threads in 141ms, 70,870,381/sec, 14 ns/op
 
--- github.com/tidwall/shardmap --
-set: 1,000,000 ops over 12 threads in 78ms, 12,828,089/sec, 77 ns/op
-get: 1,000,000 ops over 12 threads in 22ms, 45,686,575/sec, 21 ns/op
-rng:       100 ops over 12 threads in 231ms,       432/sec, 2310163 ns/op
-del: 1,000,000 ops over 12 threads in 49ms, 20,259,435/sec, 49 ns/op
+-- github.com/alphadose/haxmap --
+set: 10,000,000 ops over 64 threads in 12678ms, 788,770/sec, 1267 ns/op
+get: 10,000,000 ops over 64 threads in 80ms, 125,642,501/sec, 7 ns/op
+del: 10,000,000 ops over 64 threads in 1582ms, 6,320,754/sec, 158 ns/op
+rng:       100 ops over 64 threads in 0ms, 486,807/sec, 2054 ns/op
+
+-- github.com/phuslu/shardmap --
+set: 10,000,000 ops over 64 threads in 425ms, 23,521,366/sec, 42 ns/op
+get: 10,000,000 ops over 64 threads in 79ms, 125,923,770/sec, 7 ns/op
+del: 10,000,000 ops over 64 threads in 120ms, 83,307,985/sec, 12 ns/op
+rng:       100 ops over 64 threads in 1ms, 77,454/sec, 12910 ns/op
 ```
-
-
-```
-go version go1.13.1 linux/amd64 (ec2 r5.12xlarge)
-
-     number of cpus: 48
-     number of keys: 1000000
-            keysize: 10
-        random seed: 1569533867316350480
-
--- sync.Map --
-set: 1,000,000 ops over 48 threads in 999ms, 1,001,035/sec, 998 ns/op
-get: 1,000,000 ops over 48 threads in 414ms, 2,415,938/sec, 413 ns/op
-rng:       100 ops over 48 threads in 548ms,       182/sec, 5483971 ns/op
-del: 1,000,000 ops over 48 threads in 250ms, 4,003,491/sec, 249 ns/op
-
--- stdlib map --
-set: 1,000,000 ops over 48 threads in 479ms, 2,085,895/sec, 479 ns/op
-get: 1,000,000 ops over 48 threads in 40ms, 25,032,448/sec, 39 ns/op
-rng:       100 ops over 48 threads in 116ms,       865/sec, 1155953 ns/op
-del: 1,000,000 ops over 48 threads in 222ms, 4,499,962/sec, 222 ns/op
-
--- github.com/tidwall/shardmap --
-set: 1,000,000 ops over 48 threads in 51ms, 19,592,641/sec, 51 ns/op
-get: 1,000,000 ops over 48 threads in 7ms, 150,933,098/sec, 6 ns/op
-rng:       100 ops over 48 threads in 114ms,       880/sec, 1135747 ns/op
-del: 1,000,000 ops over 48 threads in 12ms, 81,879,373/sec, 12 ns/op
-```
-
-## Contact
-
-Josh Baker [@tidwall](http://twitter.com/tidwall)
 
 ## License
 
