@@ -8,14 +8,14 @@ import (
 
 // Map is a hashmap. Like map[comparable]any, but sharded and thread-safe.
 type Map[K comparable, V any] struct {
-	mus    []syncRWMutex
+	mus    []syncMutex
 	shards []*shard[K, V]
 	ksize  int
 	cap    int
 }
 
-type syncRWMutex struct {
-	sync.RWMutex
+type syncMutex struct {
+	sync.Mutex
 	_ [64 - unsafe.Sizeof(sync.RWMutex{})]byte // avoid false sharing
 }
 
@@ -31,7 +31,7 @@ func New[K comparable, V any](cap int) (m *Map[K, V]) {
 		n *= 2
 	}
 	scap := m.cap / n
-	m.mus = make([]syncRWMutex, n)
+	m.mus = make([]syncMutex, n)
 	m.shards = make([]*shard[K, V], n)
 	for i := 0; i < n; i++ {
 		m.shards[i] = newshard[K, V](scap)
@@ -89,9 +89,9 @@ func (m *Map[K, V]) Get(key K) (value V, ok bool) {
 		}{unsafe.Pointer(&key), m.ksize})), 0)
 	}
 	shard := int(hash & uint64(len(m.mus)-1))
-	m.mus[shard].RLock()
+	m.mus[shard].Lock()
 	value, ok = m.shards[shard].Get(hash, key)
-	m.mus[shard].RUnlock()
+	m.mus[shard].Unlock()
 	return value, ok
 }
 
@@ -167,7 +167,7 @@ func (m *Map[K, V]) Len() int {
 func (m *Map[K, V]) Range(iter func(key K, value V) bool) {
 	var done bool
 	for i := 0; i < len(m.mus); i++ {
-		m.mus[i].RLock()
+		m.mus[i].Lock()
 		m.shards[i].Range(func(key K, value V) bool {
 			if !iter(key, value) {
 				done = true
@@ -175,7 +175,7 @@ func (m *Map[K, V]) Range(iter func(key K, value V) bool) {
 			}
 			return true
 		})
-		m.mus[i].RUnlock()
+		m.mus[i].Unlock()
 		if done {
 			break
 		}
