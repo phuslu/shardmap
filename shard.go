@@ -98,11 +98,12 @@ func (m *shard[K, V]) Get(xxh uint64, key K) (prev V, ok bool) {
 	hash := int(xxh >> dibBitSize)
 	i := hash & m.mask
 	for {
-		if int(m.buckets[i].hdib&maxDIB) == 0 {
+		e := m.buckets[i]
+		if int(e.hdib&maxDIB) == 0 {
 			return
 		}
-		if int(m.buckets[i].hdib>>dibBitSize) == hash && m.buckets[i].key == key {
-			return m.buckets[i].value, true
+		if int(e.hdib>>dibBitSize) == hash && e.key == key {
+			return e.value, true
 		}
 		i = (i + 1) & m.mask
 	}
