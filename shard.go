@@ -13,13 +13,13 @@ const (
 )
 
 type entry[K comparable, V any] struct {
-	hdib  uint64 // bitfield { hash:48 dib:16 }
-	key   K      // user key
-	value V      // user value
+	key   K // user key
+	value V // user value
 }
 
 // Map is a hashmap. Like map[comparable]any
 type shard[K comparable, V any] struct {
+	hdib     []uint64 // bitfield { hash:48 dib:16 }
 	buckets  []entry[K, V]
 	cap      int
 	length   int
@@ -38,6 +38,7 @@ func (m *shard[K, V]) init(cap int) {
 	if m.cap > 0 {
 		m.cap = sz
 	}
+	m.hdib = make([]uint64, sz)
 	m.buckets = make([]entry[K, V], sz)
 	m.mask = len(m.buckets) - 1
 	m.growAt = int(float64(len(m.buckets)) * loadFactor)
@@ -48,8 +49,8 @@ func (m *shard[K, V]) resize(newCap int) {
 	var nmap shard[K, V]
 	nmap.init(newCap)
 	for i := 0; i < len(m.buckets); i++ {
-		if int(m.buckets[i].hdib&maxDIB) > 0 {
-			nmap.set(int(m.buckets[i].hdib>>dibBitSize), m.buckets[i].key, m.buckets[i].value)
+		if int(m.hdib[i]&maxDIB) > 0 {
+			nmap.set(int(m.hdib[i]>>dibBitSize), m.buckets[i].key, m.buckets[i].value)
 		}
 	}
 	cap := m.cap
@@ -70,24 +71,28 @@ func (m *shard[K, V]) Set(xxh uint64, key K, value V) (V, bool) {
 }
 
 func (m *shard[K, V]) set(hash int, key K, value V) (prev V, ok bool) {
-	e := entry[K, V]{uint64(hash)<<dibBitSize | uint64(1)&maxDIB, key, value}
-	i := int(e.hdib>>dibBitSize) & m.mask
+	hdib := uint64(hash)<<dibBitSize | uint64(1)&maxDIB
+	e := entry[K, V]{key, value}
+	i := int(hdib>>dibBitSize) & m.mask
 	for {
-		if int(m.buckets[i].hdib&maxDIB) == 0 {
+		if int(m.hdib[i]&maxDIB) == 0 {
+			m.hdib[i] = hdib
 			m.buckets[i] = e
 			m.length++
 			return
 		}
-		if int(e.hdib>>dibBitSize) == int(m.buckets[i].hdib>>dibBitSize) && e.key == m.buckets[i].key {
+		if int(hdib>>dibBitSize) == int(m.hdib[i]>>dibBitSize) && e.key == m.buckets[i].key {
 			old := m.buckets[i].value
+			m.hdib[i] = hdib
 			m.buckets[i].value = e.value
 			return old, true
 		}
-		if int(m.buckets[i].hdib&maxDIB) < int(e.hdib&maxDIB) {
+		if int(m.hdib[i]&maxDIB) < int(hdib&maxDIB) {
+			hdib, m.hdib[i] = m.hdib[i], hdib
 			e, m.buckets[i] = m.buckets[i], e
 		}
 		i = (i + 1) & m.mask
-		e.hdib = e.hdib>>dibBitSize<<dibBitSize | uint64(int(e.hdib&maxDIB)+1)&maxDIB
+		hdib = hdib>>dibBitSize<<dibBitSize | uint64(int(hdib&maxDIB)+1)&maxDIB
 	}
 }
 
@@ -100,10 +105,10 @@ func (m *shard[K, V]) Get(xxh uint64, key K) (prev V, ok bool) {
 	hash := int(xxh >> dibBitSize)
 	i := hash & m.mask
 	for {
-		if int(m.buckets[i].hdib&maxDIB) == 0 {
+		if int(m.hdib[i]&maxDIB) == 0 {
 			return
 		}
-		if int(m.buckets[i].hdib>>dibBitSize) == hash && m.buckets[i].key == key {
+		if int(m.hdib[i]>>dibBitSize) == hash && m.buckets[i].key == key {
 			return m.buckets[i].value, true
 		}
 		i = (i + 1) & m.mask
@@ -124,10 +129,10 @@ func (m *shard[K, V]) Delete(xxh uint64, key K) (v V, ok bool) {
 	hash := int(xxh >> dibBitSize)
 	i := hash & m.mask
 	for {
-		if int(m.buckets[i].hdib&maxDIB) == 0 {
+		if int(m.hdib[i]&maxDIB) == 0 {
 			return
 		}
-		if int(m.buckets[i].hdib>>dibBitSize) == hash && m.buckets[i].key == key {
+		if int(m.hdib[i]>>dibBitSize) == hash && m.buckets[i].key == key {
 			old := m.buckets[i].value
 			m.remove(i)
 			return old, true
@@ -137,16 +142,17 @@ func (m *shard[K, V]) Delete(xxh uint64, key K) (v V, ok bool) {
 }
 
 func (m *shard[K, V]) remove(i int) {
-	m.buckets[i].hdib = m.buckets[i].hdib>>dibBitSize<<dibBitSize | uint64(0)&maxDIB
+	m.hdib[i] = m.hdib[i]>>dibBitSize<<dibBitSize | uint64(0)&maxDIB
 	for {
 		pi := i
 		i = (i + 1) & m.mask
-		if int(m.buckets[i].hdib&maxDIB) <= 1 {
+		if int(m.hdib[i]&maxDIB) <= 1 {
 			m.buckets[pi] = entry[K, V]{}
+			m.hdib[pi] = 0
 			break
 		}
 		m.buckets[pi] = m.buckets[i]
-		m.buckets[pi].hdib = m.buckets[pi].hdib>>dibBitSize<<dibBitSize | uint64(int(m.buckets[pi].hdib&maxDIB)-1)&maxDIB
+		m.hdib[pi] = m.hdib[i]>>dibBitSize<<dibBitSize | uint64(int(m.hdib[i]&maxDIB)-1)&maxDIB
 	}
 	m.length--
 	if len(m.buckets) > m.cap && m.length <= m.shrinkAt {
@@ -158,7 +164,7 @@ func (m *shard[K, V]) remove(i int) {
 // It's not safe to call or Set or Delete while ranging.
 func (m *shard[K, V]) Range(iter func(key K, value V) bool) {
 	for i := 0; i < len(m.buckets); i++ {
-		if int(m.buckets[i].hdib&maxDIB) > 0 {
+		if int(m.hdib[i]&maxDIB) > 0 {
 			if !iter(m.buckets[i].key, m.buckets[i].value) {
 				return
 			}
@@ -173,7 +179,7 @@ func (m *shard[K, V]) Range(iter func(key K, value V) bool) {
 func (m *shard[K, V]) GetPos(pos uint64) (key K, value V, ok bool) {
 	for i := 0; i < len(m.buckets); i++ {
 		index := (pos + uint64(i)) & uint64(m.mask)
-		if int(m.buckets[index].hdib&maxDIB) > 0 {
+		if int(m.hdib[index]&maxDIB) > 0 {
 			return m.buckets[index].key, m.buckets[index].value, true
 		}
 	}
